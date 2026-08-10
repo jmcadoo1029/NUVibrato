@@ -126,26 +126,42 @@ const buildTestArticleDescription = (ti) => {
 // (pickerLines is current, summary.lines is legacy, custom.rows is edge case),
 // normalize them into a single shape for the RPC payload.
 // task_num is NOT included — workspace owns numbering per Russ's contract.
-const collectQuoteLineItems = ({ pickerLines, summary, custom, quoteNumber, poNumber }) => {
+const collectQuoteLineItems = ({ pickerLines, summary, custom, lineOverrides, quoteNumber, poNumber }) => {
   const items = [];
+  // Fold any line-item description into the task name, comma-separated, so it reads
+  // as a single line in Workspace (e.g. "Tear Down" + "Unit 1" → "Tear Down, Unit 1")
+  // regardless of how Workspace renders a separate description field. description is
+  // left null so the text can't show twice if Workspace also surfaces that field.
+  const combineName = (label, desc) => {
+    const l = (label || "").trim();
+    const d = (desc && String(desc).trim()) ? String(desc).trim() : "";
+    return d ? (l ? l + ", " + d : d) : l;
+  };
   (pickerLines || []).forEach(l => {
     if (!l.label && !l.price) return;
     items.push({
-      name: l.label || "",
-      description: l.desc || null,
+      name: combineName(l.label, l.desc) || "Line Item",
+      description: null,
       sales_category: l.code || null,
       fixed_price: parseFloat(l.price) || 0,
       quote_number: quoteNumber,
       po_number: poNumber,
     });
   });
-  (summary?.lines || []).forEach(l => {
+  // Auto-calc (summary) lines carry their per-line description, price edit, and
+  // delete flag in lineOverrides (keyed by index) — the same treatment used for
+  // the quote PDF and the saved line_items. Honor all three so the Workspace
+  // tasks match what's actually on the quote (previously the description was
+  // dropped, and deleted/re-priced lines were ignored here).
+  (summary?.lines || []).forEach((l, i) => {
+    const ov = (lineOverrides || {})[i] || {};
+    if (ov.deleted) return;
     if (!l.label && !l.val) return;
     items.push({
-      name: l.label || "",
+      name: combineName(l.label, ov.desc) || "Line Item",
       description: null,
       sales_category: l.code || null,
-      fixed_price: parseFloat(l.val) || 0,
+      fixed_price: ov.price !== undefined ? (parseFloat(ov.price) || 0) : (parseFloat(l.val) || 0),
       quote_number: quoteNumber,
       po_number: poNumber,
     });
@@ -154,7 +170,7 @@ const collectQuoteLineItems = ({ pickerLines, summary, custom, quoteNumber, poNu
     (custom?.rows || []).forEach(r => {
       if (!r.label && !r.price) return;
       items.push({
-        name: r.label || "Custom Item",
+        name: combineName(r.label, r.desc) || "Custom Item",
         description: null,
         sales_category: r.pcode || "94",
         fixed_price: parseFloat(r.price) || 0,
@@ -11337,7 +11353,7 @@ export default function App({onLogout,currentUser}){
         },
         related_contacts: collectRelatedContacts(qi),
         tasks: collectQuoteLineItems({
-          pickerLines, summary, custom,
+          pickerLines, summary, custom, lineOverrides,
           quoteNumber: qi.opp, poNumber: wonInfo.poNum,
         }),
         expenses: collectBudgetExpenses(budget),
@@ -11424,7 +11440,7 @@ export default function App({onLogout,currentUser}){
         client_company: lookup.client_company,
         existing_task_count: lookup.task_count,
         new_task_count: collectQuoteLineItems({
-          pickerLines, summary, custom,
+          pickerLines, summary, custom, lineOverrides,
           quoteNumber: qi.opp, poNumber: wonInfo.poNum,
         }).length,
         new_expense_count: collectBudgetExpenses(budget).length,
@@ -11478,7 +11494,7 @@ export default function App({onLogout,currentUser}){
           quote_number: qi.opp || null,
         },
         tasks: collectQuoteLineItems({
-          pickerLines, summary, custom,
+          pickerLines, summary, custom, lineOverrides,
           quoteNumber: qi.opp, poNumber: wonInfo.poNum,
         }),
         expenses: collectBudgetExpenses(budget),
